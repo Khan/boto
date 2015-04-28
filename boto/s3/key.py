@@ -874,7 +874,14 @@ class Key(object):
             #    headers['Trailer'] = "Content-MD5"
         else:
             headers['Content-Length'] = str(self.size)
-        headers['Expect'] = '100-Continue'
+
+        # HACK(mattfaus): Due to ancient mysteries, Boto adds this header
+        # when sending stuff to S3, but doesn't actually handle the
+        # 100-continue HTTP workflow. It sometimes causes things to break in
+        # production, so we decided to remove it. This is a blind hack to
+        # get things working. More details available in the commit message.
+        # headers['Expect'] = '100-Continue'
+
         headers = boto.utils.merge_meta(headers, self.metadata, provider)
         resp = self.bucket.connection.make_request('PUT', self.bucket.name,
                                                    self.name, headers,
