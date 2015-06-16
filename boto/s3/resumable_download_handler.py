@@ -18,7 +18,6 @@
 # WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS
 # IN THE SOFTWARE.
-
 import errno
 import httplib
 import os
@@ -31,6 +30,7 @@ from boto.connection import AWSAuthConnection
 from boto.exception import ResumableDownloadException
 from boto.exception import ResumableTransferDisposition
 from boto.s3.keyfile import KeyFile
+from boto.gs.key import Key as GSKey
 
 """
 Resumable download handler.
@@ -134,12 +134,12 @@ class ResumableDownloadHandler(object):
             if len(self.etag_value_for_current_download) < self.MIN_ETAG_LEN:
                 print('Couldn\'t read etag in tracker file (%s). Restarting '
                       'download from scratch.' % self.tracker_file_name)
-        except IOError, e:
+        except IOError as e:
             # Ignore non-existent file (happens first time a download
             # is attempted on an object), but warn user for other errors.
             if e.errno != errno.ENOENT:
                 # Will restart because
-                # self.etag_value_for_current_download == None.
+                # self.etag_value_for_current_download is None.
                 print('Couldn\'t read URI tracker file (%s): %s. Restarting '
                       'download from scratch.' %
                       (self.tracker_file_name, e.strerror))
@@ -155,7 +155,7 @@ class ResumableDownloadHandler(object):
         try:
             f = open(self.tracker_file_name, 'w')
             f.write('%s\n' % self.etag_value_for_current_download)
-        except IOError, e:
+        except IOError as e:
             raise ResumableDownloadException(
                 'Couldn\'t write tracker file (%s): %s.\nThis can happen'
                 'if you\'re using an incorrectly configured download tool\n'
@@ -193,17 +193,17 @@ class ResumableDownloadHandler(object):
                    key.size), ResumableTransferDisposition.ABORT)
             elif cur_file_size == key.size:
                 if key.bucket.connection.debug >= 1:
-                    print 'Download complete.'
+                    print('Download complete.')
                 return
             if key.bucket.connection.debug >= 1:
-                print 'Resuming download.'
+                print('Resuming download.')
             headers = headers.copy()
             headers['Range'] = 'bytes=%d-%d' % (cur_file_size, key.size - 1)
             cb = ByteTranslatingCallbackHandler(cb, cur_file_size).call
             self.download_start_point = cur_file_size
         else:
             if key.bucket.connection.debug >= 1:
-                print 'Starting new resumable download.'
+                print('Starting new resumable download.')
             self._save_tracker_info(key)
             self.download_start_point = 0
             # Truncate the file, in case a new resumable download is being
@@ -212,8 +212,12 @@ class ResumableDownloadHandler(object):
 
         # Disable AWSAuthConnection-level retry behavior, since that would
         # cause downloads to restart from scratch.
-        key.get_file(fp, headers, cb, num_cb, torrent, version_id,
-                     override_num_retries=0, hash_algs=hash_algs)
+        if isinstance(key, GSKey):
+          key.get_file(fp, headers, cb, num_cb, torrent, version_id,
+                       override_num_retries=0, hash_algs=hash_algs)
+        else:
+          key.get_file(fp, headers, cb, num_cb, torrent, version_id,
+                       override_num_retries=0)
         fp.flush()
 
     def get_file(self, key, fp, headers, cb=None, num_cb=10, torrent=False,
@@ -263,9 +267,9 @@ class ResumableDownloadHandler(object):
             headers = {}
 
         # Use num-retries from constructor if one was provided; else check
-        # for a value specified in the boto config file; else default to 5.
+        # for a value specified in the boto config file; else default to 6.
         if self.num_retries is None:
-            self.num_retries = config.getint('Boto', 'num_retries', 5)
+            self.num_retries = config.getint('Boto', 'num_retries', 6)
         progress_less_iterations = 0
 
         while True:  # Retry as long as we're making progress.
@@ -280,9 +284,9 @@ class ResumableDownloadHandler(object):
                 # non-resumable downloads, this call was removed. Checksum
                 # validation of file contents should be done by the caller.
                 if debug >= 1:
-                    print 'Resumable download complete.'
+                    print('Resumable download complete.')
                 return
-            except self.RETRYABLE_EXCEPTIONS, e:
+            except self.RETRYABLE_EXCEPTIONS as e:
                 if debug >= 1:
                     print('Caught exception (%s)' % e.__repr__())
                 if isinstance(e, IOError) and e.errno == errno.EPIPE:
@@ -290,9 +294,13 @@ class ResumableDownloadHandler(object):
                     # close the socket (http://bugs.python.org/issue5542),
                     # so we need to close and reopen the key before resuming
                     # the download.
-                    key.get_file(fp, headers, cb, num_cb, torrent, version_id,
-                                 override_num_retries=0, hash_algs=hash_algs)
-            except ResumableDownloadException, e:
+                    if isinstance(key, GSKey):
+                      key.get_file(fp, headers, cb, num_cb, torrent, version_id,
+                                   override_num_retries=0, hash_algs=hash_algs)
+                    else:
+                      key.get_file(fp, headers, cb, num_cb, torrent, version_id,
+                                   override_num_retries=0)
+            except ResumableDownloadException as e:
                 if (e.disposition ==
                     ResumableTransferDisposition.ABORT_CUR_PROCESS):
                     if debug >= 1:
