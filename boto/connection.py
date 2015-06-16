@@ -548,11 +548,13 @@ class AWSAuthConnection(object):
             self.provider = provider
         else:
             self._provider_type = provider
+            anon = getattr(self, 'anon', False)
             self.provider = Provider(self._provider_type,
                                      aws_access_key_id,
                                      aws_secret_access_key,
                                      security_token,
-                                     profile_name)
+                                     profile_name,
+                                     anon)
 
         # Allow config file to override default host, port, and host header.
         if self.provider.host:

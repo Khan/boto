@@ -178,7 +178,7 @@ class Provider(object):
     }
 
     def __init__(self, name, access_key=None, secret_key=None,
-                 security_token=None, profile_name=None):
+                 security_token=None, profile_name=None, anon=False):
         self.host = None
         self.port = None
         self.host_header = None
@@ -187,6 +187,7 @@ class Provider(object):
         self.security_token = security_token
         self.profile_name = profile_name
         self.name = name
+        self.anon = anon
         self.acl_class = self.AclClassMap[self.name]
         self.canned_acls = self.CannedAclsMap[self.name]
         self._credential_expiry_time = None
@@ -372,7 +373,7 @@ class Provider(object):
                 boto.log.debug("Using security token found in config file.")
 
         if ((self._access_key is None or self._secret_key is None) and
-                self.MetadataServiceSupport[self.name]):
+                self.MetadataServiceSupport[self.name] and not self.anon):
             self._populate_keys_from_metadata_server()
         self._secret_key = self._convert_key_to_str(self._secret_key)
 
