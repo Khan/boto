@@ -95,7 +95,8 @@ class ResumableDownloadHandler(object):
     RETRYABLE_EXCEPTIONS = (httplib.HTTPException, IOError, socket.error,
                             socket.gaierror)
 
-    def __init__(self, tracker_file_name=None, num_retries=None):
+    def __init__(self, tracker_file_name=None, num_retries=None,
+                 chunk_size=0):
         """
         Constructor. Instantiate once for each downloaded file.
 
@@ -112,6 +113,10 @@ class ResumableDownloadHandler(object):
             download making no progress. (Count resets every time we get
             progress, so download can span many more than this number of
             retries.)
+
+        :type chunk_size: int
+        :param chunk_size: if this is not 0, download the file in chunks of
+            this size. Specify as the number of bytes.
         """
         self.tracker_file_name = tracker_file_name
         self.num_retries = num_retries
@@ -122,6 +127,10 @@ class ResumableDownloadHandler(object):
         # find how much was transferred by this ResumableDownloadHandler
         # (across retries).
         self.download_start_point = None
+        assert type(chunk_size) is int, 'Chunk size must be integer'
+        assert chunk_size >= 0, 'Chunk size cannot be negative'
+        self.chunk_size = chunk_size
+        self.is_chunked_download = (chunk_size > 0)
 
     def _load_tracker_file_etag(self):
         f = None
@@ -173,7 +182,8 @@ class ResumableDownloadHandler(object):
                 os.unlink(self.tracker_file_name)
 
     def _attempt_resumable_download(self, key, fp, headers, cb, num_cb,
-                                    torrent, version_id, hash_algs):
+                                    torrent, version_id, hash_algs,
+                                    chunk_num):
         """
         Attempts a resumable download.
 
@@ -198,7 +208,12 @@ class ResumableDownloadHandler(object):
             if key.bucket.connection.debug >= 1:
                 print('Resuming download.')
             headers = headers.copy()
-            headers['Range'] = 'bytes=%d-%d' % (cur_file_size, key.size - 1)
+            if self.is_chunked_download:
+                range_end = min((chunk_num+1) * self.chunk_size, key.size)
+            else:
+                range_end = key.size
+            headers['Range'] = 'bytes=%d-%d' % (cur_file_size, range_end - 1)
+
             cb = ByteTranslatingCallbackHandler(cb, cur_file_size).call
             self.download_start_point = cur_file_size
         else:
@@ -206,6 +221,9 @@ class ResumableDownloadHandler(object):
                 print('Starting new resumable download.')
             self._save_tracker_info(key)
             self.download_start_point = 0
+            if self.is_chunked_download:
+                headers = headers.copy()
+                headers['Range'] = 'bytes=%d-%d' % (0, self.chunk_size - 1)
             # Truncate the file, in case a new resumable download is being
             # started atop an existing file.
             fp.truncate(0)
@@ -270,13 +288,24 @@ class ResumableDownloadHandler(object):
         # for a value specified in the boto config file; else default to 6.
         if self.num_retries is None:
             self.num_retries = config.getint('Boto', 'num_retries', 6)
+        if self.is_chunked_download:
+            # This method of computing the ceil avoids potential floating point
+            # shenanigans
+            num_chunks = key.size // self.chunk_size
+            num_chunks += (key.size % self.chunk_size != 0)
+        else:
+            num_chunks = 1
+
         progress_less_iterations = 0
+        chunks_downloaded_successfully = 0
 
         while True:  # Retry as long as we're making progress.
             had_file_bytes_before_attempt = get_cur_file_size(fp)
             try:
                 self._attempt_resumable_download(key, fp, headers, cb, num_cb,
-                                                 torrent, version_id, hash_algs)
+                                                 torrent, version_id,
+                                                 hash_algs,
+                                                 chunks_downloaded_successfully)
                 # Download succceded, so remove the tracker file (if have one).
                 self._remove_tracker_file()
                 # Previously, check_final_md5() was called here to validate 
@@ -285,7 +314,9 @@ class ResumableDownloadHandler(object):
                 # validation of file contents should be done by the caller.
                 if debug >= 1:
                     print('Resumable download complete.')
-                return
+                chunks_downloaded_successfully += 1
+                if chunks_downloaded_successfully >= num_chunks:
+                    return
             except self.RETRYABLE_EXCEPTIONS as e:
                 if debug >= 1:
                     print('Caught exception (%s)' % e.__repr__())
