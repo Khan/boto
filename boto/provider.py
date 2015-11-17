@@ -277,7 +277,11 @@ class Provider(object):
 
         if access_key is not None:
             self.access_key = access_key
-            boto.log.debug("Using access key provided by client.")
+            boto.log.debug("Using access key provided by client.",
+                           # TODO(csilvers): remove this after debugging who
+                           # is calling this from /ios/topictree, or no
+                           # later than 1 December 2015.
+                           exc_info=True)
         elif access_key_name.upper() in os.environ:
             self.access_key = os.environ[access_key_name.upper()]
             boto.log.debug("Using access key found in environment variable.")
