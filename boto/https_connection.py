@@ -83,13 +83,26 @@ def ValidateCertificateHostname(cert, hostname):
     return False
 
 
-class CertValidatingHTTPSConnection(http_client.HTTPConnection):
-    """An HTTPConnection that connects over SSL and validates certificates."""
+# Note: CertValidatingHTTPSConnection MUST use HTTPSConnection as a base class
+# when running under AppEngine.
+#
+# AppEngine uses a custom implementation of httplib (imported in this file as
+# http_client) that uses urlfetch under the hood. The custom HTTPConnection and
+# HTTPSConnection classes define a private `_protocol` property that indicates
+# the protocol to use when constructing URLs for urlfetch. If HTTPConnection
+# were to be used as the base class (with default_port set to
+# httplib.HTTPS_PORT), this connection class would still connect over over
+# "http" (though, ironically, the validity of the certificate will still be
+# checked).
+#
+# The AppEngine implementation of httplib can be found here:
+# https://chromium.googlesource.com/external/googleappengine/python/+/master/google/appengine/dist27/gae_override/httplib.py
+class CertValidatingHTTPSConnection(http_client.HTTPSConnection):
+    """An HTTPSConnection that validates certificates."""
 
-    default_port = http_client.HTTPS_PORT
-
-    def __init__(self, host, port=default_port, key_file=None, cert_file=None,
-                 ca_certs=None, strict=None, **kwargs):
+    def __init__(self, host, port=http_client.HTTPSConnection.default_port,
+                 key_file=None, cert_file=None, ca_certs=None, strict=None,
+                 **kwargs):
         """Constructor.
 
         Args:
@@ -108,10 +121,18 @@ class CertValidatingHTTPSConnection(http_client.HTTPConnection):
             # we conditionally add it here.
             kwargs['strict'] = strict
 
-        http_client.HTTPConnection.__init__(self, host=host, port=port, **kwargs)
-        self.key_file = key_file
-        self.cert_file = cert_file
-        self.ca_certs = ca_certs
+        # key_file and cert_file are not passed to the parent constructor since
+        # an exception in raised on AppEngine when these arguments are used.
+        # They have special handling below.
+        http_client.HTTPSConnection.__init__(self, host=host, port=port, **kwargs)
+
+        # Define our own key and cert properties. The HTTPSConnection class
+        # defines key_file and cert_file properties, but we don't want to use
+        # those properties since we didn't pass these arguments to the parent
+        # constructor.
+        self.validation_key_file = key_file
+        self.validation_cert_file = cert_file
+        self.validation_ca_certs = ca_certs
 
     def connect(self):
         "Connect to a host on a given (SSL) port."
@@ -120,15 +141,15 @@ class CertValidatingHTTPSConnection(http_client.HTTPConnection):
         else:
             sock = socket.create_connection((self.host, self.port))
         msg = "wrapping ssl socket; "
-        if self.ca_certs:
-            msg += "CA certificate file=%s" % self.ca_certs
+        if self.validation_ca_certs:
+            msg += "CA certificate file=%s" % self.validation_ca_certs
         else:
             msg += "using system provided SSL certs"
         boto.log.debug(msg)
-        self.sock = ssl.wrap_socket(sock, keyfile=self.key_file,
-                                    certfile=self.cert_file,
+        self.sock = ssl.wrap_socket(sock, keyfile=self.validation_key_file,
+                                    certfile=self.validation_cert_file,
                                     cert_reqs=ssl.CERT_REQUIRED,
-                                    ca_certs=self.ca_certs)
+                                    ca_certs=self.validation_ca_certs)
         cert = self.sock.getpeercert()
         hostname = self.host.split(':', 0)[0]
         if not ValidateCertificateHostname(cert, hostname):
